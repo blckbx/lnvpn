@@ -5,11 +5,11 @@
 # Usage: sudo bash setup.sh
 
 #VERSION NUMBER of setupv2.sh
-#Update if your make a significant change
+#Update if you make a significant change
 ##########UPDATE IF YOU MAKE A NEW RELEASE#############
 major=0
-minor=0
-patch=29
+minor=1
+patch=33
 
 #Helper
 function valid_ipv4() {
@@ -46,7 +46,9 @@ echo
 
 # Check if docker / non-docker
 isDocker=0
+isUmbrel=0
 killswitchRaspi=0
+litpossible=0  # Set this to 1 earlier in your script if LIT is possible
 
 while true; do
   read -p "What lightning node package are you running?: 
@@ -69,6 +71,7 @@ while true; do
     echo "> Umbrel"
     echo
     isDocker=1
+    isUmbrel=1
     break
     ;;
 
@@ -83,6 +86,7 @@ while true; do
     echo "> RaspiBolt / Bare Metal"
     echo
     isDocker=0
+    litpossible=1
 
     break
     ;;
@@ -95,24 +99,50 @@ done
 lnImplementation=""
 
 while true; do
-  read -p "Which lightning implementation do you want to tunnel? Supported are LND and CLN for now ⚡️: " answer
+  echo "Which lightning implementation do you want to tunnel?"
+  echo "    1) LND"
+  echo "    2) CLN (Core Lightning)"
+  if [ $litpossible -eq 1 ]; then
+    echo "    3) LIT (integrated mode)"
+    echo "    4) Exit"
+    prompt_range="1-4"
+  else
+    echo "    3) Exit"
+    prompt_range="1-3"
+  fi
+  read -p "Enter your choice [${prompt_range}]: " choice
 
-  case $answer in
-  lnd | LND*)
-    echo "> Setting up Tunneling for LND on port 9735 "
-    echo
-    lnImplementation="lnd"
-    break
-    ;;
-
-  cln | CLN*)
-    echo "> Setting up Tunneling for CLN on port 9735 "
-    echo
-    lnImplementation="cln"
-    break
-    ;;
-
-  *) echo "Enter LND or CLN, please." ;;
+  case $choice in
+    1)
+      echo "> Setting up Tunneling for LND on port 9735 "
+      echo
+      lnImplementation="lnd"
+      break
+      ;;
+    2)
+      echo "> Setting up Tunneling for CLN on port 9735 "
+      echo
+      lnImplementation="cln"
+      break
+      ;;
+    3)
+      if [ $litpossible -eq 1 ]; then
+        echo "> Setting up Tunneling for integrated LND in LIT on port 9735 "
+        echo
+        lnImplementation="lit"
+        break
+      else
+        echo "Exiting..."
+        exit 0
+      fi
+      ;;
+    4)
+      echo "Exiting..."
+      exit 0
+      ;;
+    *)
+      echo "Invalid option. Please enter a valid number."
+      ;;
   esac
 done
 
@@ -145,16 +175,22 @@ if [ $isDocker -eq 0 ]; then
     echo
     exit 1
   fi
+
+  if [ "$lnImplementation" == "lit" ] && [ ! -f /etc/systemd/system/lit.service ]; then
+    echo "> /etc/systemd/system/lit.service not found. Setup aborted."
+    echo
+    exit 1
+  fi
 fi
 
 # RaspiBlitz: deactivate config checks
-if [ "$(hostname)" == "raspberrypi" ] && [ "$lnImplementation" == "lnd" ]; then
+if [ "$lnImplementation" == "lnd" ]; then
   if [ -f /home/admin/config.scripts/lnd.check.sh ]; then
     mv /home/admin/config.scripts/lnd.check.sh /home/admin/config.scripts/lnd.check.bak
     echo "RaspiBlitz detected, lnd conf safety check removed"
     echo
   fi
-elif [ "$(hostname)" == "raspberrypi" ] && [ "$lnImplementation" == "cln" ]; then
+elif [ "$lnImplementation" == "cln" ]; then
   if [ -f /home/admin/config.scripts/cl.check.sh ]; then
     mv /home/admin/config.scripts/cl.check.sh /home/admin/config.scripts/cl.check.bak
     echo "RaspiBlitz detected, cln conf safety check removed"
@@ -165,19 +201,20 @@ fi
 # check requirements and update repos
 echo "Checking and installing requirements..."
 echo "Updating the package repositories..."
-apt update >/dev/null
+apt-get update >/dev/null
 echo
 
 # only non-docker
 if [ $isDocker -eq 0 ]; then
   # check cgroup-tools only necessary when lightning runs as systemd service
   if [ -f /etc/systemd/system/lnd.service ] ||
-    [ -f /etc/systemd/system/lightningd.service ]; then
+    [ -f /etc/systemd/system/lightningd.service ] ||
+    [ -f /etc/systemd/system/lit.service ]; then
     echo "Checking cgroup-tools..."
     checkcgroup=$(cgcreate -h 2>/dev/null | grep -c "Usage")
     if [ $checkcgroup -eq 0 ]; then
       echo "Installing cgroup-tools..."
-      if apt install -y cgroup-tools >/dev/null; then
+      if apt-get install -y cgroup-tools >/dev/null; then
         echo "> cgroup-tools installed"
         echo
       else
@@ -199,7 +236,7 @@ echo "Checking nftables installation..."
 checknft=$(nft -v 2>/dev/null | grep -c "nftables")
 if [ $checknft -eq 0 ]; then
   echo "Installing nftables..."
-  if apt install -y nftables >/dev/null; then
+  if apt-get install -y nftables >/dev/null; then
     echo "> nftables installed"
     echo
   else
@@ -230,14 +267,14 @@ checkwg=$(wg -v 2>/dev/null | grep -c "wireguard-tools")
 if [ $checkwg -eq 0 ]; then
   echo "Installing wireguard..."
 
-  if apt install -y wireguard >/dev/null; then
+  if apt-get install -y wireguard >/dev/null; then
     echo "> wireguard installed"
     echo
   else
     # try Debian 10 Buster workaround / myNode
     codename=$(lsb_release -c 2>/dev/null | awk '{print $2}')
     if [ "$codename" == "buster" ] && [ "$(hostname)" != "umbrel" ]; then
-      if apt install -y -t buster-backports wireguard >/dev/null; then
+      if apt-get install -y -t buster-backports wireguard >/dev/null; then
         echo "> wireguard installed"
         echo
       else
@@ -288,13 +325,13 @@ fi
 
 sleep 2
 
-# add resolvconf package to docker systems for DNS resolving
-if [ $isDocker -eq 1 ]; then
+# check for resolvconf installation
+if [ $isUmbrel -eq 0 ]; then
   echo "Checking resolvconf installation..."
-  checkResolv=$(resolvconf 2>/dev/null | grep -c "^Usage")
+  checkResolv=$(resolvconf --help 2>/dev/null | grep -c "^Register")
   if [ $checkResolv -eq 0 ]; then
     echo "Installing resolvconf..."
-    if apt install -y resolvconf >/dev/null; then
+    if apt-get install -y resolvconf >/dev/null; then
       echo "> resolvconf installed"
       echo
     else
@@ -309,7 +346,7 @@ if [ $isDocker -eq 1 ]; then
   sleep 2
 fi
 
-#Create Docker Tunnelsat Network which stays persistent over restarts
+#Create Docker Tunnelsat Network
 if [ $isDocker -eq 1 ]; then
 
   echo "Creating TunnelSats Docker Network..."
@@ -397,7 +434,7 @@ Table = off\n
 
 PostUp = while [ \$(ip rule | grep -c suppress_prefixlength) -gt 0 ]; do ip rule del from all table  main suppress_prefixlength 0;done\n
 PostUp = while [ \$(ip rule | grep -c 0x1000000) -gt 0 ]; do ip rule del from all fwmark 0x1000000/0xff000000 table  51820;done\n
-PostUp = if [ \$(ip route show table 51820 2>/dev/null | grep -c blackhole) -gt  0 ]; then echo $?; ip route del blackhole default metric 3 table 51820; ip rule flush table 51820 ;fi\n
+PostUp = if [ \$(ip route show table 51820 2>/dev/null | grep -c blackhole) -gt  0 ]; then echo \$?; ip route del blackhole default metric 3 table 51820; ip rule flush table 51820 ;fi\n
 
 
 PostUp = ip rule add from \$(docker network inspect \"docker-tunnelsats\" | grep Subnet | awk '{print \$2}' | sed 's/[\",]//g') table 51820\n
@@ -561,7 +598,7 @@ WantedBy=multi-user.target
     exit 1
   fi
 
-  #Adding tunnelsats-create-cgroup requirement to lnd/cln
+  #Adding tunnelsats-create-cgroup requirement to lnd/cln/lit
   if [ "$lnImplementation" == "lnd" ]; then
     if [ ! -d /etc/systemd/system/lnd.service.d ]; then
       mkdir /etc/systemd/system/lnd.service.d >/dev/null
@@ -584,12 +621,28 @@ After=wg-quick@tunnelsatsv2.service
     fi
     echo "#Don't edit this file its generated by tunnelsats scripts
 [Unit]
-Description=lightningd needs cgroup before it can start
+Description=lightningd service - powered by tunnelsats
 Requires=tunnelsats-create-cgroup.service
 After=tunnelsats-create-cgroup.service
 Requires=wg-quick@tunnelsatsv2.service
 After=wg-quick@tunnelsatsv2.service
 " >/etc/systemd/system/lightningd.service.d/tunnelsats-cgroup.conf
+
+    systemctl daemon-reload >/dev/null
+
+  elif [ "$lnImplementation" == "lit" ]; then
+
+    if [ ! -d /etc/systemd/system/lit.service.d ]; then
+      mkdir /etc/systemd/system/lit.service.d >/dev/null
+    fi
+    echo "#Don't edit this file its generated by tunnelsats scripts
+[Unit]
+Description=lit service - powered by tunnelsats
+Requires=tunnelsats-create-cgroup.service
+After=tunnelsats-create-cgroup.service
+Requires=wg-quick@tunnelsatsv2.service
+After=wg-quick@tunnelsatsv2.service
+" >/etc/systemd/system/lit.service.d/tunnelsats-cgroup.conf
 
     systemctl daemon-reload >/dev/null
 
@@ -750,7 +803,7 @@ if [ $isDocker -eq 0 ]; then
       fi
 
     else
-      echo "> /etc/systemd/system/lnd.service already  starts in cgroup tunnelsats"
+      echo "> /etc/systemd/system/lnd.service already starts in cgroup tunnelsats"
       echo
     fi
 
@@ -775,6 +828,30 @@ if [ $isDocker -eq 0 ]; then
       fi
     else
       echo "> /etc/systemd/system/lightningd.service already starts in cgroup tunnelsats"
+      echo
+    fi
+
+  elif [ "$lnImplementation" == "lit" ]; then
+
+    if [ ! -f /etc/systemd/system/lit.service.bak ]; then
+      cp /etc/systemd/system/lit.service /etc/systemd/system/lit.service.bak
+    fi
+
+    #Check if lit.service already has cgexec command included
+    check=$(grep -c "cgexec" /etc/systemd/system/lit.service)
+    if [ $check -eq 0 ]; then
+      if sed -i 's/ExecStart=/ExecStart=\/usr\/bin\/cgexec -g net_cls:splitted_processes /g' /etc/systemd/system/lit.service; then
+        echo "> lit.service updated now starts in cgroup tunnelsats"
+        echo
+        echo "> backup saved under /etc/systemd/system/lit.service.bak"
+        echo
+        systemctl daemon-reload >/dev/null
+      else
+        echo "> ERR: not able to change /etc/systemd/system/lit.service. Please check for errors."
+        echo
+      fi
+    else
+      echo "> /etc/systemd/system/lit.service already starts in cgroup tunnelsats"
       echo
     fi
 
@@ -870,16 +947,31 @@ table ip tunnelsatsv2 {
   systemctl daemon-reload >/dev/null
   if systemctl enable nftables >/dev/null && systemctl start nftables >/dev/null; then
 
-    if [ ! -d /etc/systemd/system/umbrel-startup.service.d ]; then
-      mkdir /etc/systemd/system/umbrel-startup.service.d >/dev/null
+    if [ -f /etc/systemd/system/umbrel.service ]; then
+      if [ ! -d /etc/systemd/system/umbrel.service.d ]; then
+        mkdir /etc/systemd/system/umbrel.service.d >/dev/null
+      fi
+
+      echo "[Unit]
+Description=Forcing wg-quick to start after umbrel startup scripts
+# Make sure kill switch is in place before starting umbrel containers
+Requires=nftables.service
+After=nftables.service
+" >/etc/systemd/system/umbrel.service.d/tunnelsats_killswitch.conf
     fi
 
-    echo "[Unit]
+    if [ -f /etc/systemd/system/umbrel-startup.service ]; then
+      if [ ! -d /etc/systemd/system/umbrel-startup.service.d ]; then
+        mkdir /etc/systemd/system/umbrel-startup.service.d >/dev/null
+      fi
+
+      echo "[Unit]
 Description=Forcing wg-quick to start after umbrel startup scripts
 # Make sure kill switch is in place before starting umbrel containers
 Requires=nftables.service
 After=nftables.service
 " >/etc/systemd/system/umbrel-startup.service.d/tunnelsats_killswitch.conf
+    fi
 
     #Start nftables service
     systemctl daemon-reload >/dev/null
@@ -918,14 +1010,23 @@ if [ $isDocker -eq 1 ]; then
   # create file
   echo "Creating tunnelsats-docker-network.sh file in /etc/wireguard/..."
   echo "#!/bin/sh
-set -e
+#set -e
 lightningcontainer=\$(docker ps --format 'table {{.Image}} {{.Names}} {{.Ports}}' | grep 0.0.0.0:9735 | awk '{print \$2}')
 checkdockernetwork=\$(docker network ls  2> /dev/null | grep -c \"docker-tunnelsats\")
-if [ \$checkdockernetwork -ne 0 ] && [ ! -z \$lightningcontainer ]; then
-  if ! docker inspect \$lightningcontainer | grep -c \"tunnelsats\" > /dev/null; then
-  docker network connect --ip 10.9.9.9 docker-tunnelsats \$lightningcontainer  > /dev/null
+if [ \$checkdockernetwork -eq 0 ]; then
+  if ! docker network create \"docker-tunnelsats\" --subnet \"10.9.9.0/25\" -o \"com.docker.network.driver.mtu\"=\"1420\" >/dev/null; then
+    exit 1
   fi
-fi" >/etc/wireguard/tunnelsats-docker-network.sh
+fi
+if [ ! -z \$lightningcontainer ]; then
+  inspectlncontainer=\$(docker inspect \$lightningcontainer | grep -c \"tunnelsats\")
+  if [ \$inspectlncontainer -eq 0 ]; then
+    if ! docker network connect --ip 10.9.9.9 docker-tunnelsats \$lightningcontainer >/dev/null; then
+      exit 1
+    fi
+  fi
+fi
+exit 0" >/etc/wireguard/tunnelsats-docker-network.sh
 
   if [ -f /etc/wireguard/tunnelsats-docker-network.sh ]; then
     echo "> /etc/wireguard/tunnelsats-docker-network.sh created"
@@ -1030,16 +1131,29 @@ echo "Initializing the service..."
 systemctl daemon-reload >/dev/null
 if systemctl enable wg-quick@tunnelsatsv2 >/dev/null; then
 
-  if [ $isDocker -eq 1 ] && [ -f /etc/systemd/system/umbrel-startup.service ]; then
-    if [ ! -d /etc/systemd/system/wg-quick@tunnelsatsv2.service.d ]; then
-      mkdir /etc/systemd/system/wg-quick@tunnelsatsv2.service.d >/dev/null
-    fi
-    echo "[Unit]
+  if [ $isDocker -eq 1 ]; then
+    if [ -f /etc/systemd/system/umbrel.service ]; then
+      if [ ! -d /etc/systemd/system/wg-quick@tunnelsatsv2.service.d ]; then
+        mkdir /etc/systemd/system/wg-quick@tunnelsatsv2.service.d >/dev/null
+      fi
+      echo "[Unit]
 Description=Forcing wg-quick to start after umbrel startup scripts
-# Make sure to start vpn after umbrel start up to have lnd containers available
+# Make sure to start vpn after umbrel start up to have ln containers available
+Requires=umbrel.service
+After=umbrel.service
+" >/etc/systemd/system/wg-quick@tunnelsatsv2.service.d/tunnelsatsv2.conf
+    fi
+    if [ -f /etc/systemd/system/umbrel-startup.service ]; then
+      if [ ! -d /etc/systemd/system/wg-quick@tunnelsatsv2.service.d ]; then
+        mkdir /etc/systemd/system/wg-quick@tunnelsatsv2.service.d >/dev/null
+      fi
+      echo "[Unit]
+Description=Forcing wg-quick to start after umbrel startup scripts
+# Make sure to start vpn after umbrel start up to have ln containers available
 Requires=umbrel-startup.service
 After=umbrel-startup.service
 " >/etc/systemd/system/wg-quick@tunnelsatsv2.service.d/tunnelsatsv2.conf
+    fi
   fi
 
   systemctl daemon-reload >/dev/null
@@ -1190,10 +1304,55 @@ echo
 # Only the process which listens on 9735 will be reachable via the tunnel";echo
 
 if [ "$lnImplementation" == "lnd" ]; then
+  if [ $isDocker -eq 0 ]; then
 
-  echo "LND:
+    echo "LND:
 
 Before editing, please create a backup of your current LND config file.
+Then edit and add or modify the following lines. Please note that
+settings could already be part of your configuration file 
+and duplicated lines could lead to errors.
+
+#########################################
+[Application Options]
+listen=0.0.0.0:9735
+externalhosts=${vpnExternalDNS}:${vpnExternalPort}
+[Tor]
+tor.streamisolation=false
+tor.skip-proxy-for-clearnet-targets=true
+#########################################"
+    echo
+  else
+    echo "LND on Umbrel 0.5+:
+
+Make a backup and then edit ~/umbrel/app-data/lightning/data/lnd/lnd.conf 
+to add or modify the below lines.
+
+Important
+There are a few hybrid settings Umbrel's bringing to the UI, please do the following steps:
+- in the Umbrel GUI, navigate to the LND advanced settings
+- validate which of the below settings are activated already
+- leave those activated as they are
+- don't add those settings in your custom lnd.conf again to avoid duplication
+
+Example: in case tor.streamisolation and tor.skip-proxy-for-clearnet-targets is already 
+activated in the UI, skip the [Tor] section completely and only add externalhosts. 
+
+#########################################
+[Application Options]
+externalhosts=${vpnExternalDNS}:${vpnExternalPort}
+[Tor]
+tor.streamisolation=false
+tor.skip-proxy-for-clearnet-targets=true
+#########################################"
+    echo
+  fi
+fi
+
+if [ "$lnImplementation" == "lit" ]; then
+  echo "LIT:
+
+Before editing, please create a backup of your current lit.conf config file.
 Then edit and add or modify the following lines. Please note that
 settings could already be part of your configuration file 
 and duplicated lines could lead to errors.
@@ -1211,7 +1370,7 @@ tor.skip-proxy-for-clearnet-targets=true
 fi
 
 if [ "$lnImplementation" == "cln" ]; then
-
+  if [ $isUmbrel -eq 1 ]; then
   echo "CLN:
 
 Before editing, please create a backup of your current CLN config file.
@@ -1222,20 +1381,34 @@ and duplicated lines could lead to errors.
 ###############################################################################
 Umbrel 0.5+:
 create CLN config file 'config':
-  $ nano ${HOME}/umbrel/app-data/core-lightning/data/lightningd/bitcoin/config 
+  $ sudo nano ~/umbrel/app-data/core-lightning/data/lightningd/bitcoin/config 
 insert:
-  bind-addr=10.9.9.9:9735
+  bind-addr=0.0.0.0:9735
   announce-addr=${vpnExternalDNS}:${vpnExternalPort}
   always-use-proxy=false
 
 edit 'export.sh':
-  $ nano ${HOME}/umbrel/app-data/core-lightning/export.sh
+  $ nano ~/umbrel/app-data/core-lightning/export.sh
 change assigned port of APP_CORE_LIGHTNING_DAEMON_PORT from 9736 to 9735:
   export APP_CORE_LIGHTNING_DAEMON_PORT=\"9735\"
 
-###############################################################################
+edit 'docker-compose.yml':
+comment out 'bind-addr' parameter like so
+   command:
+   ...
+   #- --bind-addr=\${APP_CORE_LIGHTNING_DAEMON_IP}:9735  
 
+###############################################################################"
+
+    echo
+
+  else
+
+    echo "CLN:
+
+###############################################################################
 Native CLN installation (config file):
+
   # Tor
   addr=statictor:127.0.0.1:9051/torport=9735
   proxy=127.0.0.1:9050
@@ -1245,33 +1418,46 @@ Native CLN installation (config file):
   bind-addr=0.0.0.0:9735
   announce-addr=${vpnExternalDNS}:${vpnExternalPort}
 ###############################################################################"
-  echo
+    echo
 
+  fi
 fi
 
-echo "Please save these infos in a file or write them down for later use.
+echo "Please save this info in a file or write them down for later use.
 
-A more detailed guide is available at: https://tunnelsats.github.io/tunnelsats/
-Afterwards please restart LND / CLN for changes to take effect.
+A more detailed guide is available at: https://guide.tunnelsats.com
+Afterwards please restart LND / CLN / LIT for changes to take effect.
 VPN setup completed!
 
 Welcome to Tunnel⚡Sats.
-Feel free to join the Amboss Community here: https://amboss.space/community/29db5f25-24bb-407e-b752-be69f9431071"
+- Feel free to join the Amboss Community: https://amboss.space/community/29db5f25-24bb-407e-b752-be69f9431071
+- Check your clearnet connection functionality and speed: https://t.me/TunnelSatsBot
+- Join our Telegram Group: https://t.me/tunnelsats
+- Add a reminder on your subscription expiration date: https://t.me/TunnelSatsReminderBot"
 echo
 
 if [ $isDocker -eq 0 ]; then
   serviceName="${lnImplementation}"
   if [ "${lnImplementation}" == "cln" ]; then
     serviceName="lightningd"
+  elif [ "${lnImplementation}" == "lit" ]; then
+    serviceName="lit"
   fi
   echo "Restart ${lnImplementation} afterwards via the command:
     sudo systemctl restart ${serviceName}.service"
   echo
 else
-  echo "Restart ${lnImplementation} on Umbrel afterwards via the command:
-    sudo ~/umbrel/scripts/stop
-    sudo ~/umbrel/scripts/start"
-  echo
+  if [ -f /etc/systemd/system/umbrel-startup.service ]; then
+    echo "Restart Umbrel afterwards via the command:
+      sudo ~/umbrel/scripts/stop
+      sudo ~/umbrel/scripts/start"
+    echo
+  fi
+  if [ -f /etc/systemd/system/umbrel.service ]; then
+    echo "Restart Umbrel afterwards via the command:
+      sudo systemctl restart umbrel.service"
+    echo
+  fi
 fi
 
 # the end

@@ -1077,7 +1077,7 @@ function App() {
                 <Row>
                   <Col>
                     <a
-                      href="https://twitter.com/TunnelSats"
+                      href="https://x.com/TunnelSats"
                       target="_blank"
                       rel="noreferrer"
                     >
@@ -1113,7 +1113,7 @@ function App() {
                   </Col>
                   <Col>
                     <a
-                      href="https://t.me/+NJylaUom-rxjYjU6"
+                      href="https://t.me/+YfVVF9Q0X-A3YWIy"
                       target="_blank"
                       rel="noreferrer"
                     >
